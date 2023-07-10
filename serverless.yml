@@ -1,0 +1,85 @@
+service: s3-to-dynamodb-pipeline
+
+frameworkVersion: '3'
+
+plugins:
+  - serverless-dotenv-plugin
+
+custom:
+  dotenv:
+    path: .env
+
+useDotenv: true
+
+provider:
+  name: aws
+  runtime: python3.9  	
+  environment:
+    FOO: ${env:ENVIROMENT}
+  iamRoleStatements:
+    - Effect: Allow
+      Action:
+        - dynamodb:*
+        - s3:*
+      Resource: "*"
+
+
+functions:
+  process_s3_file:
+    handler: process_csv_file.process_s3_file
+    events:
+      - sqs:
+          arn : !GetAtt [SqsQueue, Arn]
+
+resources:
+  Parameters:
+    BucketNameParam:
+      Description: Global unique name of the bucket
+      Type: String
+      Default: ${env:S3_BUCKET_NAME}
+    
+    SqsNameParam:
+      Description: Name of the sqs
+      Type: String
+      Default: ${env:SQS_QUEUE_NAME}
+    
+    DlqNameParam:
+      Description: Name of the dlq
+      Type: String
+      Default: ${env:SQS_DLQ_NAME}
+
+  Resources:
+
+    S3Bucket:
+      Type: AWS::S3::Bucket
+      Properties:
+        BucketName: !Ref BucketNameParam
+        NotificationConfiguration:
+          QueueConfigurations:
+            - Event : 's3:ObjectCreated:*'
+              Queue :  !GetAtt [SqsQueue, Arn]
+        
+    SqsQueue:
+      Type: AWS::SQS::Queue
+      Properties:
+        QueueName: !Ref SqsNameParam
+        RedrivePolicy: 
+          deadLetterTargetArn: !GetAtt [DeadLetterQueue, Arn]
+          maxReceiveCount: 5
+    
+    DeadLetterQueue:
+      Type: AWS::SQS::Queue
+      Properties:
+        QueueName: !Ref DlqNameParam
+
+    SqsPolicy: 
+      Type: AWS::SQS::QueuePolicy
+      Properties: 
+        Queues: 
+          - !Ref SqsQueue
+        PolicyDocument: 
+          Statement: 
+            - Effect: Allow
+              Principal: '*'
+              Action: 'SQS:*'
+              Resource: !GetAtt [SqsQueue, Arn]
